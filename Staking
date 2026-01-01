@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.30;
+
+interface IERC20 {
+    function transferFrom(address from, address to, uint amount) external returns (bool);
+    function transfer(address to, uint amount) external returns (bool);
+}
+
+contract OnlyStaking {
+
+    IERC20 public stakingToken;
+    address public owner;
+
+    uint public totalStaked;
+
+    uint public constant APR = 30; 
+    uint public constant MAX_STAKE = 1000 * 1 ether; 
+    uint public constant MAX_STAKE_TIME = 5 minutes; 
+
+    struct UserInfo {
+        uint amount;        
+        uint rewardDebt;    
+        uint lastStakedTime;
+    }
+
+    mapping(address => UserInfo) public users;
+
+    event Staked(address indexed user, uint amount);
+    event Withdrawn(address indexed user, uint amount);
+    event RewardClaimed(address indexed user, uint reward);
+
+    constructor(address _token) {
+        stakingToken = IERC20(_token);
+        owner = msg.sender;
+    }
+
+    function stake(uint amount) public {
+        require(amount > 0, "Amount must be greater than 0");
+
+        require(
+            users[msg.sender].amount + amount <= MAX_STAKE,
+            "Max stake limit 1000 tokens exceeded"
+        );
+
+        stakingToken.transferFrom(msg.sender, address(this), amount);
+
+        if (users[msg.sender].amount > 0) {
+            uint pending = calculateReward(msg.sender);
+            users[msg.sender].rewardDebt += pending;
+        }
+
+        users[msg.sender].amount += amount;
+        users[msg.sender].lastStakedTime = block.timestamp;
+
+        totalStaked += amount;
+
+        emit Staked(msg.sender, amount);
+    }
+
+    function calculateReward(address user) public view returns (uint) {
+        UserInfo memory u = users[user];
+        if (u.amount == 0) return 0;
+
+        uint timeStaked = block.timestamp - u.lastStakedTime;
+        if (timeStaked > MAX_STAKE_TIME) {
+            timeStaked = MAX_STAKE_TIME;
+        }
+
+        uint reward = (u.amount * APR * timeStaked) / (365 days * 100);
+
+        reward += users[user].rewardDebt;
+
+        return reward;
+    }
+
+    function claimReward() public {
+        uint reward = calculateReward(msg.sender);
+        // reward += users[msg.sender].rewardDebt;
+
+        require(reward > 0, "No rewards available");
+
+        users[msg.sender].rewardDebt = 0;
+        users[msg.sender].lastStakedTime = block.timestamp;
+
+        stakingToken.transfer(msg.sender, reward);
+
+        emit RewardClaimed(msg.sender, reward);
+    }
+    function withdraw(uint amount) public {
+        require(amount > 0, "Amount must be greater than 0");
+        require(users[msg.sender].amount >= amount, "Not enough staked");
+
+        uint reward = calculateReward(msg.sender);
+        // reward += users[msg.sender].rewardDebt;
+
+        if (reward > 0) {
+            stakingToken.transfer(msg.sender, reward);
+            emit RewardClaimed(msg.sender, reward);
+        }
+
+        users[msg.sender].amount -= amount;
+        users[msg.sender].rewardDebt = 0;
+        users[msg.sender].lastStakedTime = block.timestamp;
+
+        totalStaked -= amount;
+
+        stakingToken.transfer(msg.sender, amount);
+
+        emit Withdrawn(msg.sender, amount);
+    }
+
+    function myStake() public view returns (uint) {
+        return users[msg.sender].amount;
+    }
+
+    function myReward() public view returns (uint) {
+        return calculateReward(msg.sender);
+    }
